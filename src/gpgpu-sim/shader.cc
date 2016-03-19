@@ -135,7 +135,8 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
                                          CONCRETE_SCHEDULER_WARP_LIMITING:
                                          NUM_CONCRETE_SCHEDULERS;
     assert ( scheduler != NUM_CONCRETE_SCHEDULERS );
-    
+
+	// Seunghee: There are schedulers per core
     for (int i = 0; i < m_config->gpgpu_num_sched_per_core; i++) {
         switch( scheduler )
         {
@@ -296,6 +297,16 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     
     m_last_inst_gpu_sim_cycle = 0;
     m_last_inst_gpu_tot_sim_cycle = 0;
+
+	// +s Seunghee, if PCAL == PCAL_STATIC, W and T is determined at the beginning
+	if (PCAL == PCAL_STATIC){
+		// Get priorities, (maybe hard-coded)
+		int T =0;
+		int W =0;
+		// Seunghee: Get optimized T and W
+		assignPrioToScheduler(T, W);		
+	}
+	// +e
 }
 
 void shader_core_ctx::reinit(unsigned start_thread, unsigned end_thread, bool reset_not_completed ) 
@@ -810,6 +821,7 @@ void scheduler_unit::cycle()
     for ( std::vector< shd_warp_t* >::const_iterator iter = m_next_cycle_prioritized_warps.begin();
           iter != m_next_cycle_prioritized_warps.end();
           iter++ ) {
+
         // Don't consider warps that are not yet valid
         if ( (*iter) == NULL || (*iter)->done_exit() ) {
             continue;
@@ -840,6 +852,16 @@ void scheduler_unit::cycle()
                 } else {
                     valid_inst = true;
                     if ( !m_scoreboard->checkCollision(warp_id, pI) ) {
+
+		      // Zhen: demo for ece786
+		      /*
+		      if (m_shader->m_sid == 1) {
+			FILE *outfile = fopen("ece786.out", "a");
+			fprintf(outfile, "Warp %d, cycle %llu\n", warp_id, gpu_sim_cycle);
+			fclose(outfile);
+		      }
+		      */
+
                         SCHED_DPRINTF( "Warp (warp_id %u, dynamic_warp_id %u) passes scoreboard\n",
                                        (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id() );
                         ready_inst = true;
@@ -2439,8 +2461,55 @@ unsigned int shader_core_config::max_cta( const kernel_info_t &k ) const
     return result;
 }
 
+// +s Seunghee, Assign T, W to each scheduler
+void scheduler_unit::assignPrioToWarps(int T, int W){
+	assignT(T);
+	assignW(W);
+
+    for ( std::vector< shd_warp_t* >::const_iterator iter = m_next_cycle_prioritized_warps.begin();
+          iter != m_next_cycle_prioritized_warps.end();
+          iter++ ) {
+		int prio = PRIO_N;
+        // Don't consider warps that are not yet valid
+        if ( (*iter) == NULL || (*iter)->done_exit() ) {
+            continue;
+        }
+
+		prio = getPriority();
+		iter->assignPrio(prio);
+    }
+	
+}
+
+void shader_core_ctx::assignPrioToScheduler(int T, int W)
+{
+    for (unsigned i = 0; i < schedulers.size(); i++) {
+        schedulers[i]->assignPrioToWarps(T, W);
+    }
+}
+// +e
+
 void shader_core_ctx::cycle()
 {
+	// +s Seunghee, 
+	if (PCAL == PCAL_DYNAMIC){
+		if (polling && !sample_period){
+			int T =0;
+			int W =0;
+			// Seunghee: Get optimized T and W
+			assignPrioToScheduler(T, W);
+		}
+		else if (polling){
+			sample_period--;
+		}
+		else {
+		// Seunghee: Determine whether we need to do another polling or not
+		// Polling condition - first W+T assignment or unsatisfied 5 conditions
+		//
+		}
+	}
+	// +e
+
 	m_stats->shader_cycles[m_sid]++;
     writeback();
     execute();
