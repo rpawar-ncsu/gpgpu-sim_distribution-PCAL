@@ -51,7 +51,6 @@
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define MIN(a,b) (((a)<(b))?(a):(b))
     
-
 /////////////////////////////////////////////////////////////////////////////
 
 std::list<unsigned> shader_core_ctx::get_regs_written( const inst_t &fvt ) const
@@ -135,8 +134,7 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
                                          CONCRETE_SCHEDULER_WARP_LIMITING:
                                          NUM_CONCRETE_SCHEDULERS;
     assert ( scheduler != NUM_CONCRETE_SCHEDULERS );
-
-	// Seunghee: There are schedulers per core
+    
     for (int i = 0; i < m_config->gpgpu_num_sched_per_core; i++) {
         switch( scheduler )
         {
@@ -298,15 +296,15 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     m_last_inst_gpu_sim_cycle = 0;
     m_last_inst_gpu_tot_sim_cycle = 0;
 
-	// +s Seunghee, if PCAL == PCAL_STATIC, W and T is determined at the beginning
-	if (PCAL == PCAL_STATIC){
-		// Get priorities, (maybe hard-coded)
-		int T =0;
-		int W =0;
-		// Seunghee: Get optimized T and W
-		assignPrioToScheduler(T, W);		
-	}
-	// +e
+    // +s Seunghee, if PCAL == PCAL_STATIC, W and T is determined at the beginning
+    //if (PCAL == PCAL_STATIC){ - ToDo. need to get these from command line
+    	// Get priorities, (maybe hard-coded)
+    	int T =2;
+    	int W =4;
+    	// Seunghee: Get optimized T and W
+	setPrioThreadsPerCore(T,W);
+    //}
+    // +e
 }
 
 void shader_core_ctx::reinit(unsigned start_thread, unsigned end_thread, bool reset_not_completed ) 
@@ -345,6 +343,9 @@ void shader_core_ctx::init_warps( unsigned cta_id, unsigned start_thread, unsign
             }
             m_simt_stack[i]->launch(start_pc,active_threads);
             m_warp[i].init(start_pc,cta_id,i,active_threads, m_dynamic_warp_id);
+
+	    fprintf(stdout,"PCAL-[Shader_core_ctx:init_warp] Cycle=%u warp created. cta_id=%u m_warp_id=%u dyn_warp_id=%u\n",gpu_tot_sim_cycle+gpu_sim_cycle, cta_id,i, m_dynamic_warp_id);
+	    
             ++m_dynamic_warp_id;
             m_not_completed += n_active;
       }
@@ -626,7 +627,17 @@ void shader_core_ctx::fetch()
                         assert( m_thread[tid]!= NULL );
                         did_exit=true;
                     }
+                //fprintf(stdout,"PCAL-[shader_core_ctx:fetch] thread completed. warp_id=%u, tid=%u, cta=%u\n",warp_id, tid, m_warp[warp_id].get_cta_id());
                 }
+		if(m_warp[warp_id].get_priority() == 1){
+			releaseT();
+			printf("PCAL-Priority thread released. Remain:%u\n",avail_T);
+		}
+		if(m_warp[warp_id].get_priority() == 2){
+			releaseW();
+			printf("PCAL-non-polluting thread released. Remain:%u\n",avail_W);
+		}
+                fprintf(stdout,"\nPCAL-[shader_core_ctx:fetch] cycle=%u warp completed. warp_id=%u cta=%u\n",gpu_tot_sim_cycle+gpu_sim_cycle, m_warp[warp_id].get_dynamic_warp_id(), m_warp[warp_id].get_cta_id());
                 if( did_exit ) 
                     m_warp[warp_id].set_done_exit();
             }
@@ -714,7 +725,7 @@ void shader_core_ctx::issue_warp( register_set& pipe_reg_set, const warp_inst_t*
 void shader_core_ctx::issue(){
     //really is issue;
     for (unsigned i = 0; i < schedulers.size(); i++) {
-        schedulers[i]->cycle();
+        schedulers[i]->cycle(avail_T, avail_W);
     }
 }
 
@@ -810,7 +821,7 @@ void scheduler_unit::order_by_priority( std::vector< T >& result_list,
     }
 }
 
-void scheduler_unit::cycle()
+void scheduler_unit::cycle(int& avail_T, int& avail_W)
 {
     SCHED_DPRINTF( "scheduler_unit::cycle()\n" );
     bool valid_inst = false;  // there was one warp with a valid instruction to issue (didn't require flush due to control hazard)
@@ -821,7 +832,6 @@ void scheduler_unit::cycle()
     for ( std::vector< shd_warp_t* >::const_iterator iter = m_next_cycle_prioritized_warps.begin();
           iter != m_next_cycle_prioritized_warps.end();
           iter++ ) {
-
         // Don't consider warps that are not yet valid
         if ( (*iter) == NULL || (*iter)->done_exit() ) {
             continue;
@@ -861,7 +871,6 @@ void scheduler_unit::cycle()
 			fclose(outfile);
 		      }
 		      */
-
                         SCHED_DPRINTF( "Warp (warp_id %u, dynamic_warp_id %u) passes scoreboard\n",
                                        (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id() );
                         ready_inst = true;
@@ -869,6 +878,10 @@ void scheduler_unit::cycle()
                         assert( warp(warp_id).inst_in_pipeline() );
                         if ( (pI->op == LOAD_OP) || (pI->op == STORE_OP) || (pI->op == MEMORY_BARRIER_OP) ) {
                             if( m_mem_out->has_free() ) {
+				//ToDo- add the token here for a warp that reaches to this point first
+				//if(((*iter)->get_priority()== 0) && (avail_T || avail_W)) //assign proprity to warp
+				//	(*iter)->assignPrio(getPriority(avail_T, avail_W));
+				
                                 m_shader->issue_warp(*m_mem_out,pI,active_mask,warp_id);
                                 issued++;
                                 issued_inst=true;
@@ -904,10 +917,15 @@ void scheduler_unit::cycle()
                warp(warp_id).ibuffer_flush();
             }
             if(warp_inst_issued) {
-                SCHED_DPRINTF( "Warp (warp_id %u, dynamic_warp_id %u) issued %u instructions\n",
+				if(((*iter)->get_priority()== 0) && (avail_T || avail_W)){ //assign proprity to warp
+						(*iter)->assignPrio(getPriority(avail_T, avail_W));
+						printf("priority assigned to warp\n");
+				}	
+                SCHED_DPRINTF( "Warp (warp_id %u, dynamic_warp_id %u) issued %u instructions with priority=%u\n",
                                (*iter)->get_warp_id(),
                                (*iter)->get_dynamic_warp_id(),
-                               issued );
+                               issued,
+				(*iter)->get_priority() );
                 do_on_warp_issued( warp_id, issued, iter );
             }
             checked++;
@@ -2462,54 +2480,32 @@ unsigned int shader_core_config::max_cta( const kernel_info_t &k ) const
 }
 
 // +s Seunghee, Assign T, W to each scheduler
-void scheduler_unit::assignPrioToWarps(int T, int W){
+//void scheduler_unit::assignPrioToWarps(int T, int W){
+
+    //for ( std::vector< shd_warp_t* >::const_iterator iter = m_next_cycle_prioritized_warps.begin();
+    //      iter != m_next_cycle_prioritized_warps.end();
+    //      iter++ ) {
+    //    	int prio = PRIO_N;
+    //    // Don't consider warps that are not yet valid
+    //    if ( (*iter) == NULL || (*iter)->done_exit() ) {
+    //        continue;
+    //    }
+
+    //    	prio = getPriority();
+    //    	iter->assignPrio(prio);
+    //}
+	
+//}
+
+void shader_core_ctx::setPrioThreadsPerCore(int T, int W)
+{
 	assignT(T);
 	assignW(W);
-
-    for ( std::vector< shd_warp_t* >::const_iterator iter = m_next_cycle_prioritized_warps.begin();
-          iter != m_next_cycle_prioritized_warps.end();
-          iter++ ) {
-		int prio = PRIO_N;
-        // Don't consider warps that are not yet valid
-        if ( (*iter) == NULL || (*iter)->done_exit() ) {
-            continue;
-        }
-
-		prio = getPriority();
-		iter->assignPrio(prio);
-    }
-	
-}
-
-void shader_core_ctx::assignPrioToScheduler(int T, int W)
-{
-    for (unsigned i = 0; i < schedulers.size(); i++) {
-        schedulers[i]->assignPrioToWarps(T, W);
-    }
 }
 // +e
 
 void shader_core_ctx::cycle()
 {
-	// +s Seunghee, 
-	if (PCAL == PCAL_DYNAMIC){
-		if (polling && !sample_period){
-			int T =0;
-			int W =0;
-			// Seunghee: Get optimized T and W
-			assignPrioToScheduler(T, W);
-		}
-		else if (polling){
-			sample_period--;
-		}
-		else {
-		// Seunghee: Determine whether we need to do another polling or not
-		// Polling condition - first W+T assignment or unsatisfied 5 conditions
-		//
-		}
-	}
-	// +e
-
 	m_stats->shader_cycles[m_sid]++;
     writeback();
     execute();
@@ -3520,4 +3516,3 @@ void shader_core_ctx::checkExecutionStatusAndUpdate(warp_inst_t &inst, unsigned 
         }
     }
 }
-

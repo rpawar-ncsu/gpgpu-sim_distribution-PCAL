@@ -54,7 +54,6 @@
 #include "gpu-cache.h"
 #include "traffic_breakdown.h"
 
-
 //+s, Seunghee Shin, define T and W
 // POLLING is based on cycles
 #define MAX_POLLING 50
@@ -119,6 +118,7 @@ public:
         m_last_fetch=0;
         m_next=0;
         m_inst_at_barrier=NULL;
+        m_prio = PRIO_N;
     }
     void init( address_type start_pc,
                unsigned cta_id,
@@ -237,14 +237,16 @@ public:
 
     unsigned get_dynamic_warp_id() const { return m_dynamic_warp_id; }
     unsigned get_warp_id() const { return m_warp_id; }
-	//+s, Seunghee Shin, Add token
-	void assignPrio(int prio) { m_prio = prio; }
-	//+e
+
+    //+s, Seunghee Shin, Add token
+    void assignPrio(int prio) { m_prio = prio; }
+    unsigned get_priority() const { return m_prio; }
+    //+e
 
 private:
-	//+s, Seunghee Shin, Add token
-	unsigned m_prio;
-	//+e
+    //+s, Seunghee Shin, Add token
+    unsigned m_prio;
+    //+e
     static const unsigned IBUFFER_SIZE=2;
     class shader_core_ctx *m_shader;
     unsigned m_cta_id;
@@ -339,7 +341,7 @@ public:
     // The core scheduler cycle method is meant to be common between
     // all the derived schedulers.  The scheduler's behaviour can be
     // modified by changing the contents of the m_next_cycle_prioritized_warps list.
-    void cycle();
+    void cycle(int&, int&);
 
     // These are some common ordering fucntions that the
     // higher order schedulers can take advantage of
@@ -372,41 +374,21 @@ public:
     // m_supervised_warps with their scheduling policies
     virtual void order_warps() = 0;
 
-	// +s Seunghee, get Token counts
-	void assignPrioToWarps(int T, int W);
-	
-	int getPriority(){
-		if (avail_T){
-			avail_T--;
-			return PRIO_T;
-		}
-
-		if (avail_W){
-			avail_W--;
-			return PRIO_W;
-		}
-			
-		return PRIO_N;
-	}
-
-	void assignT(int cnt){
-		avail_T = cnt;
-		max_T = cnt;
-	}
-
-	void assignW(int cnt){
-		avail_W = cnt;
-		max_T = cnt;
-	}
-
-	void releaseT(){
-		avail_T++;
-	}
-
-	void releaseW(){
-		avail_W++;
-	}
-	// +e
+    int getPriority(int& avail_T, int& avail_W){
+	// first assign priority threads, if available and return
+    	if (avail_T){
+    		avail_T--;
+    		return PRIO_T;
+    	}
+    
+	// next assign non-polluting threads, if possible and return;
+    	if (avail_W){
+    		avail_W--;
+    		return PRIO_W;
+    	}
+    		
+    	return PRIO_N;
+    }
 
 protected:
     virtual void do_on_warp_issued( unsigned warp_id,
@@ -438,12 +420,7 @@ protected:
     register_set* m_mem_out;
 
     int m_id;
-	// +s Seunghee, add numbers of tokens
-	int avail_T;
-	int max_T;
-	int avail_W;
-	int max_W;
-	// +e 
+
 };
 
 class lrr_scheduler : public scheduler_unit {
@@ -1827,13 +1804,49 @@ public:
     void execute();
     
     void writeback();
+
+    // +s Seunghee, Assign priority to core
+    void setPrioThreadsPerCore(int T, int W); 
+
+    int getPriority(){
+	// first assign priority threads, if available and return
+    	if (avail_T ){
+    		avail_T--;
+    		return PRIO_T;
+    	}
     
+	// next assign non-polluting threads, if possible and return;
+    	if (avail_W ){
+    		avail_W--;
+    		return PRIO_W;
+    	}
+    		
+    	return PRIO_N;
+    }
+    
+    void assignT(int cnt){
+    	avail_T = cnt;
+    	max_T = cnt; // why do we need this?
+    }
+    
+    void assignW(int cnt){
+    	avail_W = cnt;
+    	max_W = cnt; // why do we need this?
+    }
+    
+    void releaseT(){
+	assert(avail_T<=max_T);
+    	avail_T++;
+    }
+    
+    void releaseW(){
+	assert(avail_W<=max_W);
+    	avail_W++;
+    }
+    // +e
     // used in display_pipeline():
     void dump_warp_state( FILE *fout ) const;
     void print_stage(unsigned int stage, FILE *fout) const;
-	// +s Seunghee, Assign priority to scheduler
-	void assignPrioToScheduler(int T, int W);
-	// +e
     unsigned long long m_last_inst_gpu_sim_cycle;
     unsigned long long m_last_inst_gpu_tot_sim_cycle;
 
@@ -1894,11 +1907,18 @@ public:
     // run on this shader, where the warp_id is the static warp slot.
     unsigned m_dynamic_warp_id;
 
-	// +s Seunghee, polling and sample period
-	bool polling;
-	int PCAL;
-	int sample_period;
-	// +e
+    // +s Seunghee, add numbers of tokens
+    int avail_T;
+    int max_T;
+    int avail_W;
+    int max_W;
+    // +e 
+
+    // +s Seunghee, polling and sample period
+    bool polling;
+    int PCAL;
+    int sample_period;
+    // +e
 };
 
 class simt_core_cluster {
