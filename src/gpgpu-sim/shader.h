@@ -54,7 +54,17 @@
 #include "gpu-cache.h"
 #include "traffic_breakdown.h"
 
+//+s, Seunghee Shin, define T and W
+// POLLING is based on cycles
+#define MAX_POLLING 50
 
+#define PCAL_STATIC 1
+#define PCAL_DYNAMIC 2
+
+#define PRIO_N  0
+#define PRIO_T  1
+#define PRIO_W  2
+//+e
 
 #define NO_OP_FLAG            0xFF
 
@@ -108,6 +118,7 @@ public:
         m_last_fetch=0;
         m_next=0;
         m_inst_at_barrier=NULL;
+        m_prio = PRIO_N;
     }
     void init( address_type start_pc,
                unsigned cta_id,
@@ -227,7 +238,15 @@ public:
     unsigned get_dynamic_warp_id() const { return m_dynamic_warp_id; }
     unsigned get_warp_id() const { return m_warp_id; }
 
+    //+s, Seunghee Shin, Add token
+    void assignPrio(int prio) { m_prio = prio; }
+    unsigned get_priority() const { return m_prio; }
+    //+e
+
 private:
+    //+s, Seunghee Shin, Add token
+    unsigned m_prio;
+    //+e
     static const unsigned IBUFFER_SIZE=2;
     class shader_core_ctx *m_shader;
     unsigned m_cta_id;
@@ -322,7 +341,7 @@ public:
     // The core scheduler cycle method is meant to be common between
     // all the derived schedulers.  The scheduler's behaviour can be
     // modified by changing the contents of the m_next_cycle_prioritized_warps list.
-    void cycle();
+    void cycle(int&, int&);
 
     // These are some common ordering fucntions that the
     // higher order schedulers can take advantage of
@@ -355,6 +374,22 @@ public:
     // m_supervised_warps with their scheduling policies
     virtual void order_warps() = 0;
 
+    int getPriority(int& avail_T, int& avail_W){
+	// first assign priority threads, if available and return
+    	if (avail_T){
+    		avail_T--;
+    		return PRIO_T;
+    	}
+    
+	// next assign non-polluting threads, if possible and return;
+    	if (avail_W){
+    		avail_W--;
+    		return PRIO_W;
+    	}
+    		
+    	return PRIO_N;
+    }
+
 protected:
     virtual void do_on_warp_issued( unsigned warp_id,
                                     unsigned num_issued,
@@ -385,6 +420,7 @@ protected:
     register_set* m_mem_out;
 
     int m_id;
+
 };
 
 class lrr_scheduler : public scheduler_unit {
@@ -1326,6 +1362,10 @@ struct shader_core_config : public core_config
 
     int simt_core_sim_order; 
     
+	// +s Seunghee, Add static W and T
+    int static_max_W;
+    int static_max_T;
+	// +e
     unsigned mem2device(unsigned memid) const { return memid + n_simt_clusters; }
 };
 
@@ -1768,7 +1808,46 @@ public:
     void execute();
     
     void writeback();
+
+    // +s Seunghee, Assign priority to core
+    void setPrioThreadsPerCore(int T, int W); 
+
+    int getPriority(){
+	// first assign priority threads, if available and return
+    	if (avail_T ){
+    		avail_T--;
+    		return PRIO_T;
+    	}
     
+	// next assign non-polluting threads, if possible and return;
+    	if (avail_W ){
+    		avail_W--;
+    		return PRIO_W;
+    	}
+    		
+    	return PRIO_N;
+    }
+    
+    void assignT(int cnt){
+    	avail_T = cnt;
+    	max_T = cnt; // why do we need this?
+    }
+    
+    void assignW(int cnt){
+    	avail_W = cnt;
+    	max_W = cnt; // why do we need this?
+    }
+    
+    void releaseT(){
+	assert(avail_T<=max_T);
+    	avail_T++;
+    }
+    
+    void releaseW(){
+	assert(avail_W<=max_W);
+    	avail_W++;
+    }
+    // +e
     // used in display_pipeline():
     void dump_warp_state( FILE *fout ) const;
     void print_stage(unsigned int stage, FILE *fout) const;
@@ -1831,6 +1910,19 @@ public:
     // is that the dynamic_warp_id is a running number unique to every warp
     // run on this shader, where the warp_id is the static warp slot.
     unsigned m_dynamic_warp_id;
+
+    // +s Seunghee, add numbers of tokens
+    int avail_T;
+    int max_T;
+    int avail_W;
+    int max_W;
+    // +e 
+
+    // +s Seunghee, polling and sample period
+    bool polling;
+    int PCAL;
+    int sample_period;
+    // +e
 };
 
 class simt_core_cluster {

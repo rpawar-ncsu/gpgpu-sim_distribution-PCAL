@@ -366,6 +366,12 @@ void shader_core_config::reg_options(class OptionParser * opp)
                                 "For complete list of prioritization values see shader.h enum scheduler_prioritization_type"
                                 "Default: gto",
                                  "gto");
+// +s Seunghee, Add option
+	option_parser_register(opp, "-gpgpu_static_W", OPT_INT32, &static_max_W, 
+               "static max w", "0");
+	option_parser_register(opp, "-gpgpu_static_T", OPT_INT32, &static_max_T,
+				"static max T", "0");
+// +e
 }
 
 void gpgpu_sim_config::reg_options(option_parser_t opp)
@@ -437,6 +443,7 @@ void gpgpu_sim_config::reg_options(option_parser_t opp)
     option_parser_register(opp, "-trace_sampling_memory_partition", OPT_INT32, 
                           &Trace::sampling_memory_partition, "The memory partition which is printed using MEMPART_DPRINTF. Default -1 (i.e. all)",
                           "-1");
+
    ptx_file_line_stats_options(opp);
 }
 
