@@ -192,7 +192,7 @@ int memory_partition_unit::global_sub_partition_id_to_local_id(int global_sub_pa
     return (global_sub_partition_id - m_id * m_config->m_n_sub_partition_per_memory_channel); 
 }
 
-void memory_partition_unit::dram_cycle() 
+void memory_partition_unit::dram_cycle(unsigned t) 
 { 
     // pop completed memory request from dram and push it to dram-to-L2 queue 
     // of the original sub partition 
@@ -206,6 +206,9 @@ void memory_partition_unit::dram_cycle()
                 m_sub_partition[dest_spid]->set_done(mf_return); 
                 delete mf_return;
             } else {
+            	// +s, Seunghee, set L2 Queue Timestamp
+            	mf_return->setL2QueueTimestamp(t);
+				// +e
                 m_sub_partition[dest_spid]->dram_L2_queue_push(mf_return);
                 mf_return->set_status(IN_PARTITION_DRAM_TO_L2_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
                 m_arbitration_metadata.return_credit(dest_spid); 
@@ -363,6 +366,10 @@ void memory_sub_partition::cache_cycle( unsigned cycle )
             m_L2_icnt_queue->push(mf);
             m_dram_L2_queue->pop();
         }
+		// +s Seunghee, L2 queue use & delay
+//		m_stats->L2_queue_delay = mf->getL2QueueTimestamp() - cycle;
+//		m_stats->L2_queue_use++;
+		// +e
     }
 
     // prior L2 misses inserted into m_L2_dram_queue here

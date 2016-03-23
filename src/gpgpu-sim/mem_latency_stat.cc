@@ -131,6 +131,11 @@ memory_stats_t::memory_stats_t( unsigned n_shader, const struct shader_core_conf
    L2_dramtoL2length = (unsigned int*) calloc(mem_config->m_n_mem, sizeof(unsigned int));
    L2_dramtoL2writelength = (unsigned int*) calloc(mem_config->m_n_mem, sizeof(unsigned int));
    L2_L2todramlength = (unsigned int*) calloc(mem_config->m_n_mem, sizeof(unsigned int));
+
+   // +s Seunghee, L2 queue use & delay
+   L2_queue_use = 0;
+   L2_queue_tot_delay = 0;
+   // +e
 }
 
 // record the total latency

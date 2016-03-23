@@ -96,6 +96,11 @@ public:
    unsigned int **max_conc_access2samerow; //max_conc_access2samerow[dram chip id][bank id]
    unsigned int **max_servicetime2samerow; //max_servicetime2samerow[dram chip id][bank id]
 
+   // +s Seunghee, L2 queue use & delay
+   unsigned L2_queue_use;
+   unsigned L2_queue_tot_delay;
+   // +e
+
    // Power stats
    unsigned total_n_access;
    unsigned total_n_reads;

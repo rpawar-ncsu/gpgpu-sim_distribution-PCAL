@@ -630,14 +630,15 @@ void shader_core_ctx::fetch()
                     }
                 //fprintf(stdout,"PCAL-[shader_core_ctx:fetch] thread completed. warp_id=%u, tid=%u, cta=%u\n",warp_id, tid, m_warp[warp_id].get_cta_id());
                 }
-		if(m_warp[warp_id].get_priority() == 1){
-			releaseT();
-			printf("PCAL-Priority thread released. Remain:%u\n",avail_T);
-		}
-		if(m_warp[warp_id].get_priority() == 2){
-			releaseW();
-			printf("PCAL-non-polluting thread released. Remain:%u\n",avail_W);
-		}
+				
+				if(m_warp[warp_id].get_priority() == PRIO_T){
+					releaseT();
+					printf("PCAL-Priority thread released. Remain:%u\n",avail_T);
+				}
+				if(m_warp[warp_id].get_priority() == PRIO_W){
+					releaseW();
+					printf("PCAL-non-polluting thread released. Remain:%u\n",avail_W);
+				}
                 fprintf(stdout,"\nPCAL-[shader_core_ctx:fetch] cycle=%u warp completed. warp_id=%u cta=%u\n",gpu_tot_sim_cycle+gpu_sim_cycle, m_warp[warp_id].get_dynamic_warp_id(), m_warp[warp_id].get_cta_id());
                 if( did_exit ) 
                     m_warp[warp_id].set_done_exit();
@@ -834,7 +835,7 @@ void scheduler_unit::cycle(int& avail_T, int& avail_W)
           iter != m_next_cycle_prioritized_warps.end();
           iter++ ) {
         // Don't consider warps that are not yet valid
-        if ( (*iter) == NULL || (*iter)->done_exit() ) {
+        if ( (*iter) == NULL || (*iter)->done_exit() || (*iter)->getPriority() == PRIO_N ) {
             continue;
         }
         SCHED_DPRINTF( "Testing (warp_id %u, dynamic_warp_id %u)\n",
