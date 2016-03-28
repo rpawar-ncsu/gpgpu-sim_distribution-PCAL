@@ -112,10 +112,8 @@ public:
 
    unsigned get_num_flits(bool simt_to_mem);
 
-// +s Seunghee, L2Queue Timestamp, member functions -get() and set()
-   void setL2QueueTimestamp(unsigned t){ m_L2_queue_timestamp = t; }
-   void getL2QueueTimestamp(){ return m_L2_queue_timestamp; }
-// +e 
+   unsigned get_bypass(){ return m_bypass; }
+   void set_bypass(unsigned val){ m_bypass = val; }
    
 private:
    // request source information
@@ -141,10 +139,6 @@ private:
    unsigned m_timestamp2; // set to gpu_sim_cycle+gpu_tot_sim_cycle when pushed onto icnt to shader; only used for reads
    unsigned m_icnt_receive_time; // set to gpu_sim_cycle + interconnect_latency when fixed icnt latency mode is enabled
 
-   // +s Seunghee, L2Queue Timestamp
-   unsigned m_L2_queue_timestamp; // set to gpu_sim_cycle + interconnect_latency when mem_fetch is inserted to L2 queue
-   // +e
-
    // requesting instruction (put last so mem_fetch prints nicer in gdb)
    warp_inst_t m_inst;
 
@@ -152,6 +146,7 @@ private:
 
    const class memory_config *m_mem_config;
    unsigned icnt_flit_size;
+   unsigned m_bypass;
 };
 
 #endif

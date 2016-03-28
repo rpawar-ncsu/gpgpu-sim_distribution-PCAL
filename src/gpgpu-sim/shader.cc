@@ -116,7 +116,7 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     #define STRSIZE 1024
     char name[STRSIZE];
     snprintf(name, STRSIZE, "L1I_%03d", m_sid);
-    m_L1I = new read_only_cache( name,m_config->m_L1I_config,m_sid,get_shader_instruction_cache_id(),m_icnt,IN_L1I_MISS_QUEUE);
+    m_L1I = new read_only_cache( name,m_config->m_L1I_config,m_sid,get_shader_instruction_cache_id(),m_icnt,IN_L1I_MISS_QUEUE,CTYPE_L1I);
     
     m_warp.resize(m_config->max_warps_per_shader, shd_warp_t(this, warp_size));
     m_scoreboard = new Scoreboard(m_sid, m_config->max_warps_per_shader);
@@ -835,7 +835,7 @@ void scheduler_unit::cycle(int& avail_T, int& avail_W)
           iter != m_next_cycle_prioritized_warps.end();
           iter++ ) {
         // Don't consider warps that are not yet valid
-        if ( (*iter) == NULL || (*iter)->done_exit() || (*iter)->getPriority() == PRIO_N ) {
+        if ( (*iter) == NULL || (*iter)->done_exit() ) {
             continue;
         }
         SCHED_DPRINTF( "Testing (warp_id %u, dynamic_warp_id %u)\n",
@@ -1380,6 +1380,8 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, war
     mem_fetch *mf = m_mf_allocator->alloc(inst,inst.accessq_back());
     std::list<cache_event> events;
     enum cache_request_status status = cache->access(mf->get_addr(),mf,gpu_sim_cycle+gpu_tot_sim_cycle,events);
+	if (status == NO_PERMISSION)
+		return BYPASS_L1D;
     return process_cache_access( cache, mf->get_addr(), inst, events, mf, status );
 }
 
@@ -1455,8 +1457,30 @@ bool ldst_unit::memory_cycle( warp_inst_t &inst, mem_stage_stall_type &stall_rea
               m_core->inc_store_req( inst.warp_id() );
        }
    } else {
-       assert( CACHE_UNDEFINED != inst.cache_op );
-       stall_cond = process_memory_access_queue(m_L1D,inst);
+		assert( CACHE_UNDEFINED != inst.cache_op );
+		stall_cond = process_memory_access_queue(m_L1D,inst);
+
+		if (stall_cond == BYPASS_L1D){
+			stall_cond = NO_RC_FAIL;
+			unsigned control_size = inst.is_store() ? WRITE_PACKET_SIZE : READ_PACKET_SIZE;
+			unsigned size = access.get_size() + control_size;
+
+			if( m_icnt->full(size, inst.is_store() || inst.isatomic()) ) {
+				stall_cond = ICNT_RC_FAIL;
+			} else {
+				mem_fetch *mf = m_mf_allocator->alloc(inst,access);
+				mf->set_bypass(1);
+				m_icnt->push(mf);
+				inst.accessq_pop_back();
+				//inst.clear_active( access.get_warp_mask() );
+				if( inst.is_load() ) { 
+				for( unsigned r=0; r < 4; r++) 
+				  if(inst.out[r] > 0) 
+				      assert( m_pending_writes[inst.warp_id()][inst.out[r]] > 0 );
+				} else if( inst.is_store() )
+				m_core->inc_store_req( inst.warp_id() );
+			}
+		}
    }
    if( !inst.accessq_empty() ) 
        stall_cond = COAL_STALL;
@@ -1620,7 +1644,7 @@ void ldst_unit::init( mem_fetch_interface *icnt,
     snprintf(L1T_name, STRSIZE, "L1T_%03d", m_sid);
     snprintf(L1C_name, STRSIZE, "L1C_%03d", m_sid);
     m_L1T = new tex_cache(L1T_name,m_config->m_L1T_config,m_sid,get_shader_texture_cache_id(),icnt,IN_L1T_MISS_QUEUE,IN_SHADER_L1T_ROB);
-    m_L1C = new read_only_cache(L1C_name,m_config->m_L1C_config,m_sid,get_shader_constant_cache_id(),icnt,IN_L1C_MISS_QUEUE);
+    m_L1C = new read_only_cache(L1C_name,m_config->m_L1C_config,m_sid,get_shader_constant_cache_id(),icnt,IN_L1C_MISS_QUEUE,CTYPE_L1C);
     m_L1D = NULL;
     m_mem_rc = NO_RC_FAIL;
     m_num_writeback_clients=5; // = shared memory, global/local (uncached), L1D, L1T, L1C
@@ -1661,7 +1685,8 @@ ldst_unit::ldst_unit( mem_fetch_interface *icnt,
                               get_shader_normal_cache_id(),
                               m_icnt,
                               m_mf_allocator,
-                              IN_L1D_MISS_QUEUE );
+                              IN_L1D_MISS_QUEUE, 
+                              CTYPE_L1D);
     }
 }
 
@@ -1864,6 +1889,8 @@ void ldst_unit::cycle()
                assert( !mf->get_is_write() ); // L1 cache is write evict, allocate line on load miss only
 
                bool bypassL1D = false; 
+			   if (mf->get_bypass())
+			   		bypassL1D = true;
                if ( CACHE_GLOBAL == mf->get_inst().cache_op || (m_L1D == NULL) ) {
                    bypassL1D = true; 
                } else if (mf->get_access_type() == GLOBAL_ACC_R || mf->get_access_type() == GLOBAL_ACC_W) { // global memory access 

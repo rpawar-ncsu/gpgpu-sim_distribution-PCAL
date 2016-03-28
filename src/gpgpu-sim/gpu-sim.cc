@@ -1193,10 +1193,7 @@ void gpgpu_sim::cycle()
 
    if (clock_mask & DRAM) {
       for (unsigned i=0;i<m_memory_config->m_n_mem;i++){
-		 // +s, Seunghee, set L2 Queue Timestamp
-         m_memory_partition_unit[i]->dram_cycle(gpu_sim_cycle + gpu_tot_sim_cycle); // Issue the dram command (scheduler + delay model)
-         // +e
-
+         m_memory_partition_unit[i]->dram_cycle(); // Issue the dram command (scheduler + delay model)
          // Update performance counters for DRAM
          m_memory_partition_unit[i]->set_dram_power_stats(m_power_stats->pwr_mem_stat->n_cmd[CURRENT_STAT_IDX][i], m_power_stats->pwr_mem_stat->n_activity[CURRENT_STAT_IDX][i],
                         m_power_stats->pwr_mem_stat->n_nop[CURRENT_STAT_IDX][i], m_power_stats->pwr_mem_stat->n_act[CURRENT_STAT_IDX][i], m_power_stats->pwr_mem_stat->n_pre[CURRENT_STAT_IDX][i],

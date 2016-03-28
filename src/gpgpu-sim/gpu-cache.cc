@@ -1076,11 +1076,17 @@ data_cache::access( new_addr_type addr,
     unsigned cache_index = (unsigned)-1;
     enum cache_request_status probe_status
         = m_tag_array->probe( block_addr, cache_index );
-    enum cache_request_status access_status
-        = process_tag_probe( wr, probe_status, addr, cache_index, mf, time, events );
-    m_stats.inc_stats(mf->get_access_type(),
-        m_stats.select_stats_status(probe_status, access_status));
-    return access_status;
+
+	if(probe_status == MISS && c_type == CTYPE_L1D){ // Need to add prirority
+		return NO_PERMISSION;
+	}
+	else{
+	    enum cache_request_status access_status
+	        = process_tag_probe( wr, probe_status, addr, cache_index, mf, time, events );
+	    m_stats.inc_stats(mf->get_access_type(),
+	        m_stats.select_stats_status(probe_status, access_status));
+	    return access_status;
+	}
 }
 
 /// This is meant to model the first level data cache in Fermi.
