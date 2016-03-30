@@ -563,7 +563,10 @@ public:
       m_mshrs(config.m_mshr_entries,config.m_mshr_max_merge), 
       m_bandwidth_management(config) 
     {
+// +s Seunghee, cache init
     	c_type = type;
+		mshr_rsv_fail = 0;
+// +e
         init( name, config, memport, status );
     }
 
@@ -648,7 +651,11 @@ protected:
     std::list<mem_fetch*> m_miss_queue;
     enum mem_fetch_status m_miss_queue_status;
     mem_fetch_interface *m_memport;
+
+	// +s, Seunghee 
+	unsigned mshr_rsv_fail;
 	cache_type c_type;
+	// +e
 
     struct extra_mf_fields {
         extra_mf_fields()  { m_valid = false;}

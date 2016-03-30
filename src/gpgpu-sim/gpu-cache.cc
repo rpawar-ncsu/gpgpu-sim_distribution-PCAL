@@ -749,6 +749,10 @@ void baseline_cache::send_read_request(new_addr_type addr, new_addr_type block_a
 
     bool mshr_hit = m_mshrs.probe(block_addr);
     bool mshr_avail = !m_mshrs.full(block_addr);
+	if (!mshr_avail){
+		mshr_rsv_fail++;
+	}
+	
     if ( mshr_hit && mshr_avail ) {
     	if(read_only)
     		m_tag_array->access(block_addr,time,cache_index);
@@ -851,6 +855,9 @@ data_cache::wr_miss_wa( new_addr_type addr,
     // Conservatively ensure the worst-case request can be handled this cycle
     bool mshr_hit = m_mshrs.probe(block_addr);
     bool mshr_avail = !m_mshrs.full(block_addr);
+	if (!mshr_avail){
+		mshr_rsv_fail++;
+	}
     if(miss_queue_full(2) 
         || (!(mshr_hit && mshr_avail) 
         && !(!mshr_hit && mshr_avail 
