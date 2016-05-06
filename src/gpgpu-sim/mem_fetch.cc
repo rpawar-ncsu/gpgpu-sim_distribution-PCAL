@@ -41,6 +41,10 @@ mem_fetch::mem_fetch( const mem_access_t &access,
                       unsigned tpc, 
                       const class memory_config *config )
 {
+// +s Seunghee
+   m_bypass =0;
+   m_prio = PRIO_N;
+// +e
    m_request_uid = sm_next_mf_request_uid++;
    m_access = access;
    if( inst ) { 

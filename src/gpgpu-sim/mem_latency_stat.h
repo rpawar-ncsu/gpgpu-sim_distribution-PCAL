@@ -44,7 +44,9 @@ public:
    void memlatstat_icnt2mem_pop( class mem_fetch *mf);
    void memlatstat_lat_pw();
    void memlatstat_print(unsigned n_mem, unsigned gpu_mem_n_bk);
-
+//+s, Seunghee
+   void memlatstat_l2queue_done(unsigned long long t);
+// +e
    void visualizer_print( gzFile visualizer_file );
 
    unsigned m_n_shader;
@@ -95,6 +97,11 @@ public:
    unsigned int **row_access; //row_access[dram chip id][bank id]
    unsigned int **max_conc_access2samerow; //max_conc_access2samerow[dram chip id][bank id]
    unsigned int **max_servicetime2samerow; //max_servicetime2samerow[dram chip id][bank id]
+
+   // +s Seunghee, L2 queue use & delay
+   unsigned L2_queue_use;
+   unsigned long long L2_queue_tot_delay;
+   // +e
 
    // Power stats
    unsigned total_n_access;

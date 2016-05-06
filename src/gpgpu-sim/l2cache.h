@@ -64,7 +64,10 @@ public:
    bool busy() const;
 
    void cache_cycle( unsigned cycle );
-   void dram_cycle();
+	// +s Seunghee,  Modification for L2 timestamp
+//	 void dram_cycle();
+	void dram_cycle(unsigned t);
+	// +e
 
    void set_done( mem_fetch *mf );
 

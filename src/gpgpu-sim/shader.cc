@@ -116,7 +116,7 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     #define STRSIZE 1024
     char name[STRSIZE];
     snprintf(name, STRSIZE, "L1I_%03d", m_sid);
-    m_L1I = new read_only_cache( name,m_config->m_L1I_config,m_sid,get_shader_instruction_cache_id(),m_icnt,IN_L1I_MISS_QUEUE);
+    m_L1I = new read_only_cache( name,m_config->m_L1I_config,m_sid,get_shader_instruction_cache_id(),m_icnt,IN_L1I_MISS_QUEUE,CTYPE_L1I);
     
     m_warp.resize(m_config->max_warps_per_shader, shd_warp_t(this, warp_size));
     m_scoreboard = new Scoreboard(m_sid, m_config->max_warps_per_shader);
@@ -297,10 +297,11 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     m_last_inst_gpu_tot_sim_cycle = 0;
 
     // +s Seunghee, if PCAL == PCAL_STATIC, W and T is determined at the beginning
+	printf("static MAX W: %d, Max T: %d \n", m_config->static_max_W, m_config->static_max_T);    
     //if (PCAL == PCAL_STATIC){ - ToDo. need to get these from command line
     	// Get priorities, (maybe hard-coded)
-    	int T =2;
-    	int W =4;
+	int T =m_config->static_max_T;
+	int W =m_config->static_max_W;
     	// Seunghee: Get optimized T and W
 	setPrioThreadsPerCore(T,W);
     //}
@@ -344,7 +345,7 @@ void shader_core_ctx::init_warps( unsigned cta_id, unsigned start_thread, unsign
             m_simt_stack[i]->launch(start_pc,active_threads);
             m_warp[i].init(start_pc,cta_id,i,active_threads, m_dynamic_warp_id);
 
-	    fprintf(stdout,"PCAL-[Shader_core_ctx:init_warp] Cycle=%u warp created. cta_id=%u m_warp_id=%u dyn_warp_id=%u\n",gpu_tot_sim_cycle+gpu_sim_cycle, cta_id,i, m_dynamic_warp_id);
+//	    fprintf(stdout,"PCAL-[Shader_core_ctx:init_warp] Cycle=%u warp created. cta_id=%u m_warp_id=%u dyn_warp_id=%u\n",gpu_tot_sim_cycle+gpu_sim_cycle, cta_id,i, m_dynamic_warp_id);
 	    
             ++m_dynamic_warp_id;
             m_not_completed += n_active;
@@ -579,7 +580,7 @@ void shader_core_ctx::decode()
     if( m_inst_fetch_buffer.m_valid ) {
         // decode 1 or 2 instructions and place them into ibuffer
         address_type pc = m_inst_fetch_buffer.m_pc;
-        const warp_inst_t* pI1 = ptx_fetch_inst(pc);
+        warp_inst_t* pI1 = ptx_fetch_inst(pc);
         m_warp[m_inst_fetch_buffer.m_warp_id].ibuffer_fill(0,pI1);
         m_warp[m_inst_fetch_buffer.m_warp_id].inc_inst_in_pipeline();
         if( pI1 ) {
@@ -589,7 +590,7 @@ void shader_core_ctx::decode()
             }else if(pI1->oprnd_type==FP_OP) {
             	m_stats->m_num_FPdecoded_insn[m_sid]++;
             }
-           const warp_inst_t* pI2 = ptx_fetch_inst(pc+pI1->isize);
+           warp_inst_t* pI2 = ptx_fetch_inst(pc+pI1->isize);
            if( pI2 ) {
                m_warp[m_inst_fetch_buffer.m_warp_id].ibuffer_fill(1,pI2);
                m_warp[m_inst_fetch_buffer.m_warp_id].inc_inst_in_pipeline();
@@ -629,15 +630,16 @@ void shader_core_ctx::fetch()
                     }
                 //fprintf(stdout,"PCAL-[shader_core_ctx:fetch] thread completed. warp_id=%u, tid=%u, cta=%u\n",warp_id, tid, m_warp[warp_id].get_cta_id());
                 }
-		if(m_warp[warp_id].get_priority() == 1){
-			releaseT();
-			printf("PCAL-Priority thread released. Remain:%u\n",avail_T);
-		}
-		if(m_warp[warp_id].get_priority() == 2){
-			releaseW();
-			printf("PCAL-non-polluting thread released. Remain:%u\n",avail_W);
-		}
-                fprintf(stdout,"\nPCAL-[shader_core_ctx:fetch] cycle=%u warp completed. warp_id=%u cta=%u\n",gpu_tot_sim_cycle+gpu_sim_cycle, m_warp[warp_id].get_dynamic_warp_id(), m_warp[warp_id].get_cta_id());
+				
+				if(m_warp[warp_id].get_priority() == PRIO_T){
+					releaseT();
+					printf("PCAL-Priority thread released. Remain:%u\n",avail_T);
+				}
+				if(m_warp[warp_id].get_priority() == PRIO_W){
+					releaseW();
+					printf("PCAL-non-polluting thread released. Remain:%u\n",avail_W);
+				}
+//                fprintf(stdout,"\nPCAL-[shader_core_ctx:fetch] cycle=%u warp completed. warp_id=%u cta=%u\n",gpu_tot_sim_cycle+gpu_sim_cycle, m_warp[warp_id].get_dynamic_warp_id(), m_warp[warp_id].get_cta_id());
                 if( did_exit ) 
                     m_warp[warp_id].set_done_exit();
             }
@@ -710,6 +712,17 @@ void shader_core_ctx::issue_warp( register_set& pipe_reg_set, const warp_inst_t*
     m_stats->shader_cycle_distro[2+(*pipe_reg)->active_count()]++;
     func_exec_inst( **pipe_reg );
     if( next_inst->op == BARRIER_OP ){
+		if(m_warp[warp_id].get_priority() == PRIO_T){
+			m_warp[warp_id].assignPrio(PRIO_N);
+			releaseT();
+			printf("Barrier reached [%d], PCAL-Priority thread released. Remain:%u\n",warp_id,avail_T);
+		}
+		if(m_warp[warp_id].get_priority() == PRIO_W){
+			m_warp[warp_id].assignPrio(PRIO_N);
+			releaseW();
+			printf("Barrier reached [%d], PCAL-non-polluting thread released. Remain:%u\n",warp_id,avail_W);
+		}
+
     	m_warp[warp_id].store_info_of_last_inst_at_barrier(*pipe_reg);
         m_barriers.warp_reaches_barrier(m_warp[warp_id].get_cta_id(),warp_id,const_cast<warp_inst_t*> (next_inst));
 
@@ -836,17 +849,38 @@ void scheduler_unit::cycle(int& avail_T, int& avail_W)
         if ( (*iter) == NULL || (*iter)->done_exit() ) {
             continue;
         }
-        SCHED_DPRINTF( "Testing (warp_id %u, dynamic_warp_id %u)\n",
-                       (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id() );
+
+		if ( (*iter)->get_priority() == PRIO_N ){
+//			printf( "Testing #1 (warp_id %u, dynamic_warp_id %u), (%d, %d)\n",
+//						   (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(), avail_T, avail_W );
+			
+			if((avail_T || avail_W) && !((*iter)->waiting()) && !((*iter)->ibuffer_empty())){ //assign proprity to warp
+				(*iter)->assignPrio(getPriority(avail_T, avail_W));
+				printf( "Testing #1 (warp_id %u, dynamic_warp_id %u), (%d, %d)\n",
+					   (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(), avail_T, avail_W );
+			}
+			else {
+				continue;
+			}
+
+//			printf( "Testing #2 (warp_id %u, dynamic_warp_id %u), (%d, %d)\n",
+//						   (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(), avail_T, avail_W );
+		}
+
+//        SCHED_DPRINTF( "Testing (warp_id %u, dynamic_warp_id %u)\n",
+//                       (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id() );
         unsigned warp_id = (*iter)->get_warp_id();
         unsigned checked=0;
         unsigned issued=0;
         unsigned max_issue = m_shader->m_config->gpgpu_max_insn_issue_per_warp;
         while( !warp(warp_id).waiting() && !warp(warp_id).ibuffer_empty() && (checked < max_issue) && (checked <= issued) && (issued < max_issue) ) {
-            const warp_inst_t *pI = warp(warp_id).ibuffer_next_inst();
+            warp_inst_t *pI = warp(warp_id).ibuffer_next_inst();
             bool valid = warp(warp_id).ibuffer_next_valid();
             bool warp_inst_issued = false;
             unsigned pc,rpc;
+			// +s Seunghee
+			pI->set_priority((*iter)->get_priority());
+			// +e
             m_simt_stack[warp_id]->get_pdom_stack_top_info(&pc,&rpc);
             SCHED_DPRINTF( "Warp (warp_id %u, dynamic_warp_id %u) has valid instruction (%s)\n",
                            (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(),
@@ -881,6 +915,24 @@ void scheduler_unit::cycle(int& avail_T, int& avail_W)
 				//ToDo- add the token here for a warp that reaches to this point first
 				//if(((*iter)->get_priority()== 0) && (avail_T || avail_W)) //assign proprity to warp
 				//	(*iter)->assignPrio(getPriority(avail_T, avail_W));
+
+
+/*
+				if ( (*iter)->get_priority() == PRIO_N ){
+					printf( "Testing #1 (warp_id %u, dynamic_warp_id %u), (%d, %d)\n",
+								   (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(), avail_T, avail_W );
+					
+					if(avail_T || avail_W){ //assign proprity to warp
+						(*iter)->assignPrio(getPriority(avail_T, avail_W));
+					}
+					else {
+						continue;
+					}
+				
+					printf( "Testing #2 (warp_id %u, dynamic_warp_id %u), (%d, %d)\n",
+								   (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(), avail_T, avail_W );
+				}
+*/
 				
                                 m_shader->issue_warp(*m_mem_out,pI,active_mask,warp_id);
                                 issued++;
@@ -917,15 +969,29 @@ void scheduler_unit::cycle(int& avail_T, int& avail_W)
                warp(warp_id).ibuffer_flush();
             }
             if(warp_inst_issued) {
-				if(((*iter)->get_priority()== 0) && (avail_T || avail_W)){ //assign proprity to warp
-						(*iter)->assignPrio(getPriority(avail_T, avail_W));
-						printf("priority assigned to warp\n");
-				}	
                 SCHED_DPRINTF( "Warp (warp_id %u, dynamic_warp_id %u) issued %u instructions with priority=%u\n",
                                (*iter)->get_warp_id(),
                                (*iter)->get_dynamic_warp_id(),
                                issued,
 				(*iter)->get_priority() );
+
+/*
+				if ( (*iter)->get_priority() == PRIO_N ){
+					printf( "Testing #1 (warp_id %u, dynamic_warp_id %u), (%d, %d)\n",
+								   (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(), avail_T, avail_W );
+					
+					if(avail_T || avail_W){ //assign proprity to warp
+						(*iter)->assignPrio(getPriority(avail_T, avail_W));
+					}
+					else {
+						continue;
+					}
+				
+					printf( "Testing #2 (warp_id %u, dynamic_warp_id %u), (%d, %d)\n",
+								   (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id(), avail_T, avail_W );
+				}
+*/
+
                 do_on_warp_issued( warp_id, issued, iter );
             }
             checked++;
@@ -1378,6 +1444,8 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, war
     mem_fetch *mf = m_mf_allocator->alloc(inst,inst.accessq_back());
     std::list<cache_event> events;
     enum cache_request_status status = cache->access(mf->get_addr(),mf,gpu_sim_cycle+gpu_tot_sim_cycle,events);
+//	if (status == NO_PERMISSION)
+//		return BYPASS_L1D;
     return process_cache_access( cache, mf->get_addr(), inst, events, mf, status );
 }
 
@@ -1453,8 +1521,34 @@ bool ldst_unit::memory_cycle( warp_inst_t &inst, mem_stage_stall_type &stall_rea
               m_core->inc_store_req( inst.warp_id() );
        }
    } else {
-       assert( CACHE_UNDEFINED != inst.cache_op );
-       stall_cond = process_memory_access_queue(m_L1D,inst);
+		assert( CACHE_UNDEFINED != inst.cache_op );
+		stall_cond = process_memory_access_queue(m_L1D,inst);
+
+//		if (stall_cond == BYPASS_L1D){
+//			stall_cond = process_memory_access_queue(m_L2,inst);
+
+/*
+			stall_cond = NO_RC_FAIL;
+			unsigned control_size = inst.is_store() ? WRITE_PACKET_SIZE : READ_PACKET_SIZE;
+			unsigned size = access.get_size() + control_size;
+
+			if( m_icnt->full(size, inst.is_store() || inst.isatomic()) ) {
+				stall_cond = ICNT_RC_FAIL;
+			} else {
+				mem_fetch *mf = m_mf_allocator->alloc(inst,access);
+				mf->set_bypass(1);
+				m_icnt->push(mf);
+				inst.accessq_pop_back();
+				//inst.clear_active( access.get_warp_mask() );
+				if( inst.is_load() ) { 
+				for( unsigned r=0; r < 4; r++) 
+				  if(inst.out[r] > 0) 
+				      assert( m_pending_writes[inst.warp_id()][inst.out[r]] > 0 );
+				} else if( inst.is_store() )
+				m_core->inc_store_req( inst.warp_id() );
+			}
+		*/
+//		}
    }
    if( !inst.accessq_empty() ) 
        stall_cond = COAL_STALL;
@@ -1618,7 +1712,7 @@ void ldst_unit::init( mem_fetch_interface *icnt,
     snprintf(L1T_name, STRSIZE, "L1T_%03d", m_sid);
     snprintf(L1C_name, STRSIZE, "L1C_%03d", m_sid);
     m_L1T = new tex_cache(L1T_name,m_config->m_L1T_config,m_sid,get_shader_texture_cache_id(),icnt,IN_L1T_MISS_QUEUE,IN_SHADER_L1T_ROB);
-    m_L1C = new read_only_cache(L1C_name,m_config->m_L1C_config,m_sid,get_shader_constant_cache_id(),icnt,IN_L1C_MISS_QUEUE);
+    m_L1C = new read_only_cache(L1C_name,m_config->m_L1C_config,m_sid,get_shader_constant_cache_id(),icnt,IN_L1C_MISS_QUEUE,CTYPE_L1C);
     m_L1D = NULL;
     m_mem_rc = NO_RC_FAIL;
     m_num_writeback_clients=5; // = shared memory, global/local (uncached), L1D, L1T, L1C
@@ -1659,7 +1753,8 @@ ldst_unit::ldst_unit( mem_fetch_interface *icnt,
                               get_shader_normal_cache_id(),
                               m_icnt,
                               m_mf_allocator,
-                              IN_L1D_MISS_QUEUE );
+                              IN_L1D_MISS_QUEUE, 
+                              CTYPE_L1D);
     }
 }
 
@@ -1794,7 +1889,9 @@ void ldst_unit::writeback()
                 serviced_client = next_client; 
             }
             break;
-        default: abort();
+        default: 
+			printf("ldst: writeback()\n");
+			abort();
         }
     }
     // update arbitration priority only if: 
@@ -1862,6 +1959,10 @@ void ldst_unit::cycle()
                assert( !mf->get_is_write() ); // L1 cache is write evict, allocate line on load miss only
 
                bool bypassL1D = false; 
+//			   if (mf->get_bypass()){
+//			   		bypassL1D = true;
+//					mf->set_bypass(false);
+//			   }
                if ( CACHE_GLOBAL == mf->get_inst().cache_op || (m_L1D == NULL) ) {
                    bypassL1D = true; 
                } else if (mf->get_access_type() == GLOBAL_ACC_R || mf->get_access_type() == GLOBAL_ACC_W) { // global memory access 

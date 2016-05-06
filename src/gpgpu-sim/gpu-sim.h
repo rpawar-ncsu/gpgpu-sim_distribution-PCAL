@@ -355,8 +355,6 @@ private:
     int gpu_stat_sample_freq;
     int gpu_runtime_stat_flag;
 
-
-
     unsigned long long liveness_message_freq; 
 
     friend class gpgpu_sim;

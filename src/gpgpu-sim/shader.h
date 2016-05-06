@@ -62,8 +62,8 @@
 #define PCAL_DYNAMIC 2
 
 #define PRIO_N  0
-#define PRIO_T  1
-#define PRIO_W  2
+#define PRIO_W  1
+#define PRIO_T  2
 //+e
 
 #define NO_OP_FLAG            0xFF
@@ -170,7 +170,7 @@ public:
     void store_info_of_last_inst_at_barrier(const warp_inst_t *pI){ m_inst_at_barrier = pI;}
     const warp_inst_t * restore_info_of_last_inst_at_barrier(){ return m_inst_at_barrier;}
 
-    void ibuffer_fill( unsigned slot, const warp_inst_t *pI )
+    void ibuffer_fill( unsigned slot, warp_inst_t *pI )
     {
        assert(slot < IBUFFER_SIZE );
        m_ibuffer[slot].m_inst=pI;
@@ -193,7 +193,7 @@ public:
             m_ibuffer[i].m_valid=false; 
         }
     }
-    const warp_inst_t *ibuffer_next_inst() { return m_ibuffer[m_next].m_inst; }
+    warp_inst_t *ibuffer_next_inst() { return m_ibuffer[m_next].m_inst; }
     bool ibuffer_next_valid() { return m_ibuffer[m_next].m_valid; }
     void ibuffer_free()
     {
@@ -262,7 +262,7 @@ private:
     
     struct ibuffer_entry {
        ibuffer_entry() { m_valid = false; m_inst = NULL; }
-       const warp_inst_t *m_inst;
+       warp_inst_t *m_inst;
        bool m_valid;
     };
 
@@ -374,6 +374,7 @@ public:
     // m_supervised_warps with their scheduling policies
     virtual void order_warps() = 0;
 
+    // +s Seugnhee, 
     int getPriority(int& avail_T, int& avail_W){
 	// first assign priority threads, if available and return
     	if (avail_T){
@@ -389,6 +390,7 @@ public:
     		
     	return PRIO_N;
     }
+    // +e	
 
 protected:
     virtual void do_on_warp_issued( unsigned warp_id,
@@ -1202,6 +1204,7 @@ protected:
    tex_cache *m_L1T; // texture cache
    read_only_cache *m_L1C; // constant cache
    l1_cache *m_L1D; // data cache
+   
    std::map<unsigned/*warp_id*/, std::map<unsigned/*regnum*/,unsigned/*count*/> > m_pending_writes;
    std::list<mem_fetch*> m_response_fifo;
    opndcoll_rfu_t *m_operand_collector;
@@ -1362,6 +1365,10 @@ struct shader_core_config : public core_config
 
     int simt_core_sim_order; 
     
+	// +s Seunghee, Add static W and T
+    int static_max_W;
+    int static_max_T;
+	// +e
     unsigned mem2device(unsigned memid) const { return memid + n_simt_clusters; }
 };
 
@@ -1585,6 +1592,9 @@ public:
                                       m_core_id, 
                                       m_cluster_id, 
                                       m_memory_config);
+		// +s, Seunghee
+		mf->set_priority(inst_copy.get_priority());
+		// +e
         return mf;
     }
 

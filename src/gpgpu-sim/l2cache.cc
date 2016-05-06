@@ -192,7 +192,7 @@ int memory_partition_unit::global_sub_partition_id_to_local_id(int global_sub_pa
     return (global_sub_partition_id - m_id * m_config->m_n_sub_partition_per_memory_channel); 
 }
 
-void memory_partition_unit::dram_cycle() 
+void memory_partition_unit::dram_cycle(unsigned t) 
 { 
     // pop completed memory request from dram and push it to dram-to-L2 queue 
     // of the original sub partition 
@@ -308,7 +308,7 @@ memory_sub_partition::memory_sub_partition( unsigned sub_partition_id,
     m_mf_allocator = new partition_mf_allocator(config);
 
     if(!m_config->m_L2_config.disabled())
-       m_L2cache = new l2_cache(L2c_name,m_config->m_L2_config,-1,-1,m_L2interface,m_mf_allocator,IN_PARTITION_L2_MISS_QUEUE);
+       m_L2cache = new l2_cache(L2c_name,m_config->m_L2_config,-1,-1,m_L2interface,m_mf_allocator,IN_PARTITION_L2_MISS_QUEUE,CTYPE_L2);
 
     unsigned int icnt_L2;
     unsigned int L2_dram;
@@ -363,6 +363,10 @@ void memory_sub_partition::cache_cycle( unsigned cycle )
             m_L2_icnt_queue->push(mf);
             m_dram_L2_queue->pop();
         }
+		// +s Seunghee, L2 queue use & delay
+//		m_stats->L2_queue_delay = mf->getL2QueueTimestamp() - cycle;
+//		m_stats->L2_queue_use++;
+		// +e
     }
 
     // prior L2 misses inserted into m_L2_dram_queue here
@@ -372,6 +376,8 @@ void memory_sub_partition::cache_cycle( unsigned cycle )
     // new L2 texture accesses and/or non-texture accesses
     if ( !m_L2_dram_queue->full() && !m_icnt_L2_queue->empty() ) {
         mem_fetch *mf = m_icnt_L2_queue->top();
+
+//		printf ("L2 cache access, addr: %llu, bypass: %d \n", mf->get_addr(), mf->get_bypass());
         if ( !m_config->m_L2_config.disabled() &&
               ( (m_config->m_L2_texure_only && mf->istexture()) || (!m_config->m_L2_texure_only) )
            ) {
@@ -396,13 +402,20 @@ void memory_sub_partition::cache_cycle( unsigned cycle )
                             mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
                             m_L2_icnt_queue->push(mf);
                         }
+
+						unsigned long long delay = mf->getL2QueueTimestamp() - gpu_sim_cycle+gpu_tot_sim_cycle;
+						m_stats->memlatstat_l2queue_done(delay);
                         m_icnt_L2_queue->pop();
                     } else {
                         assert(write_sent);
+						unsigned long long delay = mf->getL2QueueTimestamp() - gpu_sim_cycle+gpu_tot_sim_cycle;
+						m_stats->memlatstat_l2queue_done(delay);
                         m_icnt_L2_queue->pop();
                     }
                 } else if ( status != RESERVATION_FAIL ) {
                     // L2 cache accepted request
+					unsigned long long delay = mf->getL2QueueTimestamp() - gpu_sim_cycle+gpu_tot_sim_cycle;
+					m_stats->memlatstat_l2queue_done(delay);
                     m_icnt_L2_queue->pop();
                 } else {
                     assert(!write_sent);
@@ -412,6 +425,9 @@ void memory_sub_partition::cache_cycle( unsigned cycle )
             }
         } else {
             // L2 is disabled or non-texture access to texture-only L2
+			unsigned long long delay = mf->getL2QueueTimestamp() - gpu_sim_cycle+gpu_tot_sim_cycle;
+			m_stats->memlatstat_l2queue_done(delay);
+
             mf->set_status(IN_PARTITION_L2_TO_DRAM_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
             m_L2_dram_queue->push(mf);
             m_icnt_L2_queue->pop();
@@ -423,6 +439,7 @@ void memory_sub_partition::cache_cycle( unsigned cycle )
         mem_fetch* mf = m_rop.front().req;
         m_rop.pop();
         m_icnt_L2_queue->push(mf);
+		mf->setL2QueueTimestamp(gpu_sim_cycle+gpu_tot_sim_cycle);
         mf->set_status(IN_PARTITION_ICNT_TO_L2_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
     }
 }
@@ -547,6 +564,7 @@ void memory_sub_partition::push( mem_fetch* req, unsigned long long cycle )
         m_stats->memlatstat_icnt2mem_pop(req);
         if( req->istexture() ) {
             m_icnt_L2_queue->push(req);
+			req->setL2QueueTimestamp(gpu_sim_cycle+gpu_tot_sim_cycle);
             req->set_status(IN_PARTITION_ICNT_TO_L2_QUEUE,gpu_sim_cycle+gpu_tot_sim_cycle);
         } else {
             rop_delay_t r;

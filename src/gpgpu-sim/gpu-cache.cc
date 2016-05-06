@@ -213,7 +213,9 @@ enum cache_request_status tag_array::probe( new_addr_type addr, unsigned &idx ) 
         idx = invalid_line;
     } else if ( valid_line != (unsigned)-1) {
         idx = valid_line;
-    } else abort(); // if an unreserved block exists, it is either invalid or replaceable 
+    } else {
+    	abort(); // if an unreserved block exists, it is either invalid or replaceable 
+    }
 
     return MISS;
 }
@@ -684,6 +686,9 @@ bool baseline_cache::bandwidth_management::fill_port_free() const
 void baseline_cache::cycle(){
     if ( !m_miss_queue.empty() ) {
         mem_fetch *mf = m_miss_queue.front();
+		if (c_type == CTYPE_L1D){
+
+		}
         if ( !m_memport->full(mf->size(),mf->get_is_write()) ) {
             m_miss_queue.pop_front();
             m_memport->push(mf);
@@ -701,18 +706,33 @@ void baseline_cache::fill(mem_fetch *mf, unsigned time){
     assert( e != m_extra_mf_fields.end() );
     assert( e->second.m_valid );
     mf->set_data_size( e->second.m_data_size );
-    if ( m_config.m_alloc_policy == ON_MISS )
-        m_tag_array->fill(e->second.m_cache_index,time);
-    else if ( m_config.m_alloc_policy == ON_FILL )
-        m_tag_array->fill(e->second.m_block_addr,time);
-    else abort();
-    bool has_atomic = false;
-    m_mshrs.mark_ready(e->second.m_block_addr, has_atomic);
-    if (has_atomic) {
-        assert(m_config.m_alloc_policy == ON_MISS);
-        cache_block_t &block = m_tag_array->get_block(e->second.m_cache_index);
-        block.m_status = MODIFIED; // mark line as dirty for atomic operation
-    }
+//	printf("fill() cachetype: %d, fill() address: %llu bypass: %u\n", c_type, mf->get_addr(), mf->get_bypass());
+	// +s Seunghee, add bypass
+	if (mf->get_bypass() && c_type == CTYPE_L1D){
+		bool has_atomic = false;
+		m_mshrs.mark_ready(e->second.m_block_addr, has_atomic);
+//		mf->set_bypass(0);
+	}
+	else {
+	// +e
+	    if ( m_config.m_alloc_policy == ON_MISS )
+	        m_tag_array->fill(e->second.m_cache_index,time);
+	    else if ( m_config.m_alloc_policy == ON_FILL )
+	        m_tag_array->fill(e->second.m_block_addr,time);
+	    else {
+			printf("cache failure #1 \n");
+			abort();
+	    }
+	    bool has_atomic = false;
+	    m_mshrs.mark_ready(e->second.m_block_addr, has_atomic);
+	    if (has_atomic) {
+	        assert(m_config.m_alloc_policy == ON_MISS);
+	        cache_block_t &block = m_tag_array->get_block(e->second.m_cache_index);
+	        block.m_status = MODIFIED; // mark line as dirty for atomic operation
+	    }
+		// +s Seunghee, add bypass
+	}
+	// +e	
     m_extra_mf_fields.erase(mf);
     m_bandwidth_management.use_fill_port(mf); 
 }
@@ -749,23 +769,44 @@ void baseline_cache::send_read_request(new_addr_type addr, new_addr_type block_a
 
     bool mshr_hit = m_mshrs.probe(block_addr);
     bool mshr_avail = !m_mshrs.full(block_addr);
-    if ( mshr_hit && mshr_avail ) {
-    	if(read_only)
-    		m_tag_array->access(block_addr,time,cache_index);
-    	else
-    		m_tag_array->access(block_addr,time,cache_index,wb,evicted);
+	// +s Seunghee, MSHR rsv counter
+	if (!mshr_avail){
+		mshr_rsv_fail++;
+	}
+	// +e
 
+//	printf("send_read_request cachetype: %d, fill() address: %llu, bypass: %d \n", c_type, mf->get_addr(), mf->get_bypass());
+    if ( mshr_hit && mshr_avail ) {
+		// +s Seunghee, add bypass
+		if (c_type != CTYPE_L1D || !mf->get_bypass()){
+		// +e
+	    	if(read_only)
+	    		m_tag_array->access(block_addr,time,cache_index);
+	    	else
+	    		m_tag_array->access(block_addr,time,cache_index,wb,evicted);
+		// +s Seunghee, add bypass
+		}
+		// +e
         m_mshrs.add(block_addr,mf);
         do_miss = true;
     } else if ( !mshr_hit && mshr_avail && (m_miss_queue.size() < m_config.m_miss_queue_size) ) {
-    	if(read_only)
-    		m_tag_array->access(block_addr,time,cache_index);
-    	else
-    		m_tag_array->access(block_addr,time,cache_index,wb,evicted);
+    	// +s Seunghee, add bypass
+		if (c_type != CTYPE_L1D || !mf->get_bypass()){
+		// +e
+	    	if(read_only)
+	    		m_tag_array->access(block_addr,time,cache_index);
+	    	else
+	    		m_tag_array->access(block_addr,time,cache_index,wb,evicted);
+		// +s Seunghee, add bypass
+		}
+		// +e
 
         m_mshrs.add(block_addr,mf);
         m_extra_mf_fields[mf] = extra_mf_fields(block_addr,cache_index, mf->get_data_size());
         mf->set_data_size( m_config.get_line_sz() );
+		// +s, Seunghee, set L2 Queue Timestamp
+		mf->setL2QueueTimestamp(gpu_tot_sim_cycle+gpu_sim_cycle);
+		// +e
         m_miss_queue.push_back(mf);
         mf->set_status(m_miss_queue_status,time);
         if(!wa)
@@ -778,6 +819,9 @@ void baseline_cache::send_read_request(new_addr_type addr, new_addr_type block_a
 /// Sends write request to lower level memory (write or writeback)
 void data_cache::send_write_request(mem_fetch *mf, cache_event request, unsigned time, std::list<cache_event> &events){
     events.push_back(request);
+	// +s, Seunghee, set L2 Queue Timestamp
+	mf->setL2QueueTimestamp(gpu_tot_sim_cycle+gpu_sim_cycle);
+	// +e
     m_miss_queue.push_back(mf);
     mf->set_status(m_miss_queue_status,time);
 }
@@ -851,11 +895,20 @@ data_cache::wr_miss_wa( new_addr_type addr,
     // Conservatively ensure the worst-case request can be handled this cycle
     bool mshr_hit = m_mshrs.probe(block_addr);
     bool mshr_avail = !m_mshrs.full(block_addr);
+	int bypass = mf->get_bypass();
+	
+	if (!mshr_avail){
+		mshr_rsv_fail++;
+	}
     if(miss_queue_full(2) 
         || (!(mshr_hit && mshr_avail) 
         && !(!mshr_hit && mshr_avail 
         && (m_miss_queue.size() < m_config.m_miss_queue_size))))
         return RESERVATION_FAIL;
+
+	if (bypass){
+		mf->set_bypass(0);
+	}
 
     send_write_request(mf, WRITE_REQUEST_SENT, time, events);
     // Tries to send write allocate request, returns true on success and false on failure
@@ -876,6 +929,10 @@ data_cache::wr_miss_wa( new_addr_type addr,
                     mf->get_sid(),
                     mf->get_tpc(),
                     mf->get_mem_config());
+
+	if (bypass){
+		n_mf->set_bypass(1);
+	}
 
     bool do_miss = false;
     bool wb = false;
@@ -1076,11 +1133,25 @@ data_cache::access( new_addr_type addr,
     unsigned cache_index = (unsigned)-1;
     enum cache_request_status probe_status
         = m_tag_array->probe( block_addr, cache_index );
-    enum cache_request_status access_status
-        = process_tag_probe( wr, probe_status, addr, cache_index, mf, time, events );
-    m_stats.inc_stats(mf->get_access_type(),
-        m_stats.select_stats_status(probe_status, access_status));
-    return access_status;
+
+//	printf("data cache access %d\n", mf->get_priority());
+	if(probe_status == MISS && c_type == CTYPE_L1D && mf->get_priority() < 2){ // Need to add priority
+		mf->set_bypass(1);
+	}
+//	if(probe_status == MISS && c_type == CTYPE_L1D){ // Need to add priority
+//		mf->set_bypass(1);
+//	}
+
+//		return NO_PERMISSION;
+//	}
+//	else{
+
+	    enum cache_request_status access_status
+	        = process_tag_probe( wr, probe_status, addr, cache_index, mf, time, events );
+	    m_stats.inc_stats(mf->get_access_type(),
+	        m_stats.select_stats_status(probe_status, access_status));
+	    return access_status;
+//	}
 }
 
 /// This is meant to model the first level data cache in Fermi.
